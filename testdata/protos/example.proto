@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package example;
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+
+import "subpkg/subpkg.proto";
+
+message SearchRequest {
+  message Spec {
+    int32 page_number = 1;
+    int32 result_per_page = 2;
+  }
+  string query = 1;
+  Spec spec = 2;
+  enum Corpus {
+    UNIVERSAL = 0;
+    WEB = 1;
+    IMAGES = 2;
+    LOCAL = 3;
+    NEWS = 4;
+    PRODUCTS = 5;
+    VIDEO = 6;
+  }
+  Corpus corpus = 4;
+}
+
+message SearchResponse {
+  repeated subpkg.Result result = 1;
+  google.protobuf.Timestamp now = 2;
+}
+
+message DebugResponse {
+  google.protobuf.Struct attributes = 1;
+  string revision_hash = 2;
+}
+
+service SearchService {
+  rpc Search (SearchRequest) returns (SearchResponse);
+  rpc Debug (google.protobuf.Empty) returns (DebugResponse);
+}

@@ -82,13 +82,13 @@ export interface {{.JSONInterface}} {
 }
 
 export class {{.Name}} implements {{.Interface}} {
-  private _json: {{.JSONInterface}}
+  private readonly _json: {{.JSONInterface}};
 
   constructor(m?: {{.Interface}}) {
-    this._json = {}
+    this._json = {};
     if (m) {
       {{- range .Fields}}
-      this._json['{{.Name}}'] = m.{{.Field}}
+      this._json['{{.Name}}'] = m.{{.Field}};
       {{- end}}
     }
   }
@@ -150,7 +150,7 @@ export interface {{.Interface}} {
 export class {{.Name}} implements {{.Interface}} {
   private hostname: string
   private fetch: Fetch
-  private path = '/twirp/{{.Package}}.{{.Name}}/'
+  private path = '/twirp/{{.Package}}.{{.Name}}/';
 
   constructor(hostname: string, fetch: Fetch) {
     this.hostname = hostname

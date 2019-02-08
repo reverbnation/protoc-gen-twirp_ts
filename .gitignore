@@ -3,3 +3,4 @@
 *.ts
 *.js
 node_modules
+vendor

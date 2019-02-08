@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"path"
+	"path/filepath"
 	"strings"
 
 	"github.com/golang/protobuf/protoc-gen-go/descriptor"
@@ -55,10 +56,6 @@ func samePackage(a *descriptor.FileDescriptorProto, b *descriptor.FileDescriptor
 	return true
 }
 
-func fullTypeName(fd *descriptor.FileDescriptorProto, typeName string) string {
-	return fmt.Sprintf(".%s.%s", fd.GetPackage(), typeName)
-}
-
 func generate(req *plugin.CodeGeneratorRequest) (*plugin.CodeGeneratorResponse, error) {
 	resolver := dependencyResolver{}
 
@@ -72,6 +69,13 @@ func generate(req *plugin.CodeGeneratorRequest) (*plugin.CodeGeneratorResponse, 
 	}
 
 	protoFiles := req.GetProtoFile()
+	for _, pf := range protoFiles {
+		if pf.GetPackage() == "" {
+			return nil, fmt.Errorf("all files must have a package")
+		}
+		resolver.AddFile(pf)
+	}
+
 	for i := range protoFiles {
 		file := protoFiles[i]
 
@@ -84,10 +88,8 @@ func generate(req *plugin.CodeGeneratorRequest) (*plugin.CodeGeneratorResponse, 
 
 		// Add enum
 		for _, enum := range file.GetEnumType() {
-			resolver.Set(file, enum.GetName())
-
 			v := &enumValues{
-				Name:   enum.GetName(),
+				Name:   underscoreize(enum.GetName()),
 				Values: []*enumKeyVal{},
 			}
 
@@ -103,78 +105,11 @@ func generate(req *plugin.CodeGeneratorRequest) (*plugin.CodeGeneratorResponse, 
 
 		// Add messages
 		for _, message := range file.GetMessageType() {
-			name := message.GetName()
-			tsInterface := typeToInterface(name)
-			jsonInterface := typeToJSONInterface(name)
-
-			resolver.Set(file, name)
-			resolver.Set(file, tsInterface)
-			resolver.Set(file, jsonInterface)
-
-			v := &messageValues{
-				Name:          name,
-				Interface:     tsInterface,
-				JSONInterface: jsonInterface,
-
-				Fields:      []*fieldValues{},
-				NestedTypes: []*messageValues{},
-				NestedEnums: []*enumValues{},
-			}
-
-			if len(message.GetNestedType()) > 0 {
-				// TODO: add support for nested messages
-				// https://developers.google.com/protocol-buffers/docs/proto#nested
-				log.Printf("warning: nested messages are not supported yet")
-			}
-
-			// Add nested enums
-			for _, enum := range message.GetEnumType() {
-				e := &enumValues{
-					Name:   fmt.Sprintf("%s_%s", message.GetName(), enum.GetName()),
-					Values: []*enumKeyVal{},
-				}
-
-				for _, value := range enum.GetValue() {
-					e.Values = append(e.Values, &enumKeyVal{
-						Name:  value.GetName(),
-						Value: value.GetNumber(),
-					})
-				}
-
-				v.NestedEnums = append(v.NestedEnums, e)
-			}
-
-			// Add message fields
-			for _, field := range message.GetField() {
-				fp, err := resolver.Resolve(field.GetTypeName())
-				if err == nil {
-					if !samePackage(fp, file) {
-						pfile.Imports[fp.GetPackage()] = &importValues{
-							Name: importName(fp),
-							Path: importPath(file, fp.GetPackage()),
-						}
-					}
-				}
-
-				typeName := resolver.TypeName(file, singularFieldType(message, field))
-
-				v.Fields = append(v.Fields, &fieldValues{
-					Name:  field.GetName(),
-					Field: camelCase(field.GetName()),
-
-					Type:       typeName,
-					IsEnum:     field.GetType() == descriptor.FieldDescriptorProto_TYPE_ENUM,
-					IsRepeated: isRepeated(field),
-				})
-			}
-
-			pfile.Messages = append(pfile.Messages, v)
+			pfile.Messages = append(pfile.Messages, processMessage(&resolver, file, pfile, message))
 		}
 
 		// Add services
 		for _, service := range file.GetService() {
-			resolver.Set(file, service.GetName())
-
 			v := &serviceValues{
 				Package:   file.GetPackage(),
 				Name:      service.GetName(),
@@ -183,34 +118,19 @@ func generate(req *plugin.CodeGeneratorRequest) (*plugin.CodeGeneratorResponse, 
 			}
 
 			for _, method := range service.GetMethod() {
-				{
-					fp, err := resolver.Resolve(method.GetInputType())
-					if err == nil {
-						if !samePackage(fp, file) {
-							pfile.Imports[fp.GetPackage()] = &importValues{
-								Name: importName(fp),
-								Path: importPath(file, fp.GetPackage()),
-							}
-						}
-					}
+				input := fieldTypeName(&resolver, file, descriptor.FieldDescriptorProto_TYPE_MESSAGE, method.GetInputType())
+				if input.Import != nil {
+					pfile.Imports[input.Import.Name] = input.Import
 				}
-
-				{
-					fp, err := resolver.Resolve(method.GetOutputType())
-					if err == nil {
-						if !samePackage(fp, file) {
-							pfile.Imports[fp.GetPackage()] = &importValues{
-								Name: importName(fp),
-								Path: importPath(file, fp.GetPackage()),
-							}
-						}
-					}
+				output := fieldTypeName(&resolver, file, descriptor.FieldDescriptorProto_TYPE_MESSAGE, method.GetOutputType())
+				if output.Import != nil {
+					pfile.Imports[output.Import.Name] = output.Import
 				}
 
 				v.Methods = append(v.Methods, &serviceMethodValues{
 					Name:       method.GetName(),
-					InputType:  resolver.TypeName(file, removePkg(method.GetInputType())),
-					OutputType: resolver.TypeName(file, removePkg(method.GetOutputType())),
+					InputType:  input.Name,
+					OutputType: output.Name,
 				})
 			}
 
@@ -237,72 +157,101 @@ func generate(req *plugin.CodeGeneratorRequest) (*plugin.CodeGeneratorResponse, 
 		})
 	}
 
-	for i := range res.File {
-		log.Printf("wrote: %v", *res.File[i].Name)
+	return res, nil
+}
+
+func processMessage(resolver *dependencyResolver, file *descriptor.FileDescriptorProto, pfile *protoFile, message *descriptor.DescriptorProto) *messageValues {
+	name := underscoreize(message.GetName())
+	tsInterface := typeToInterface(name)
+	jsonInterface := typeToJSONInterface(name)
+
+	v := &messageValues{
+		Name:          name,
+		Interface:     tsInterface,
+		JSONInterface: jsonInterface,
+
+		Fields:      []*fieldValues{},
+		NestedTypes: []*messageValues{},
+		NestedEnums: []*enumValues{},
 	}
 
-	return res, nil
+	if len(message.GetNestedType()) > 0 {
+		for _, nt := range message.GetNestedType() {
+			pfile.Messages = append(pfile.Messages, processMessage(resolver, file, pfile, nt))
+		}
+	}
+
+	// Add nested enums
+	for _, enum := range message.GetEnumType() {
+		e := &enumValues{
+			Name:   underscoreize(enum.GetName()),
+			Values: []*enumKeyVal{},
+		}
+
+		for _, value := range enum.GetValue() {
+			e.Values = append(e.Values, &enumKeyVal{
+				Name:  value.GetName(),
+				Value: value.GetNumber(),
+			})
+		}
+
+		v.NestedEnums = append(v.NestedEnums, e)
+	}
+
+	// Add message fields
+	for _, field := range message.GetField() {
+		fieldType := fieldTypeName(resolver, file, field.GetType(), field.GetTypeName())
+		if fieldType.Import != nil {
+			pfile.Imports[fieldType.Import.Name] = fieldType.Import
+		}
+
+		v.Fields = append(v.Fields, &fieldValues{
+			Name:  field.GetName(),
+			Field: field.GetJsonName(),
+
+			Type:       fieldType.Name,
+			IsEnum:     field.GetType() == descriptor.FieldDescriptorProto_TYPE_ENUM,
+			IsRepeated: isRepeated(field),
+		})
+	}
+
+	return v
 }
 
 func isRepeated(field *descriptor.FieldDescriptorProto) bool {
 	return field.Label != nil && *field.Label == descriptor.FieldDescriptorProto_LABEL_REPEATED
 }
 
-func removePkg(s string) string {
-	p := strings.SplitN(s, ".", 3)
-	c := strings.Split(p[len(p)-1], ".")
-	return strings.Join(c, "_")
-}
-
 func upperCaseFirst(s string) string {
 	return strings.ToUpper(s[0:1]) + s[1:]
 }
 
-func camelCase(s string) string {
-	parts := strings.Split(s, "_")
-
-	for i, p := range parts {
-		if i == 0 {
-			parts[i] = p
-		} else {
-			parts[i] = strings.ToUpper(p[0:1]) + p[1:]
-		}
+func getImport(fd *descriptor.FileDescriptorProto) *importValues {
+	return &importValues{
+		Name: tsImportName(fd),
+		Path: tsImportPath(fd),
 	}
-
-	return strings.Join(parts, "")
 }
 
-func importName(fp *descriptor.FileDescriptorProto) string {
-	return tsImportName(fp.GetPackage())
+func underscoreize(s string) string {
+	return strings.Replace(s, ".", "_", -1)
 }
 
-func tsImportName(name string) string {
-	base := path.Base(name)
-	return base[0 : len(base)-len(path.Ext(base))]
+func tsImportPath(fd *descriptor.FileDescriptorProto) string {
+	fileName := tsFileName(fd)
+	return fileName[0 : len(fileName)-len(path.Ext(fileName))]
 }
 
-func tsImportPath(name string) string {
-	base := path.Base(name)
-	name = name[0 : len(name)-len(path.Ext(base))]
-	return name
-}
-
-func importPath(fd *descriptor.FileDescriptorProto, name string) string {
-	// TODO: how to resolve relative paths?
-	return tsImportPath(name)
+func tsImportName(fd *descriptor.FileDescriptorProto) string {
+	return underscoreize(fd.GetPackage())
 }
 
 func tsFileName(fd *descriptor.FileDescriptorProto) string {
-	packageName := fd.GetPackage()
-	if packageName == "" {
-		packageName = path.Base(fd.GetName())
-	}
-	name := path.Join(path.Dir(fd.GetName()), packageName)
-	return tsImportPath(name) + ".ts"
+	return filepath.Join(filepath.Dir(fd.GetName()), fd.GetPackage()+".ts")
 }
 
-func singularFieldType(m *descriptor.DescriptorProto, f *descriptor.FieldDescriptorProto) string {
-	switch f.GetType() {
+func fieldTypeName(resolver *dependencyResolver, fd *descriptor.FileDescriptorProto, typ descriptor.FieldDescriptorProto_Type, typeName string) *tsType {
+	switch typ {
 	case descriptor.FieldDescriptorProto_TYPE_DOUBLE,
 		descriptor.FieldDescriptorProto_TYPE_FIXED32,
 		descriptor.FieldDescriptorProto_TYPE_FIXED64,
@@ -310,29 +259,18 @@ func singularFieldType(m *descriptor.DescriptorProto, f *descriptor.FieldDescrip
 		descriptor.FieldDescriptorProto_TYPE_INT64,
 		descriptor.FieldDescriptorProto_TYPE_UINT32,
 		descriptor.FieldDescriptorProto_TYPE_UINT64:
-		return "number"
-	case descriptor.FieldDescriptorProto_TYPE_ENUM:
-		return removePkg(f.GetTypeName())
-	case descriptor.FieldDescriptorProto_TYPE_STRING:
-		return "string"
+		return &tsType{Name: "number"}
+	case descriptor.FieldDescriptorProto_TYPE_STRING,
+		descriptor.FieldDescriptorProto_TYPE_BYTES:
+		return &tsType{Name: "string"}
 	case descriptor.FieldDescriptorProto_TYPE_BOOL:
-		return "boolean"
-	case descriptor.FieldDescriptorProto_TYPE_MESSAGE:
-		name := f.GetTypeName()
-
-		// Google WKT Timestamp is a special case here:
-		//
-		// Currently the value will just be left as jsonpb RFC 3339 string.
-		// JSON.stringify already handles serializing Date to its RFC 3339 format.
-		//
-		if name == ".google.protobuf.Timestamp" {
-			return "Date"
-		}
-
-		return removePkg(name)
+		return &tsType{Name: "boolean"}
+	case descriptor.FieldDescriptorProto_TYPE_ENUM,
+		descriptor.FieldDescriptorProto_TYPE_MESSAGE:
+		return resolver.TsType(fd, typeName)
 	default:
-		//log.Printf("unknown type %q in field %q", f.GetType(), f.GetName())
-		return "string"
+		log.Printf("unknown type %q", typ)
+		return &tsType{Name: "string"}
 	}
 
 }
