@@ -53,7 +53,7 @@ func TestGenerate(t *testing.T) {
 				return
 			}
 
-			saveOutput(t, got)
+			//saveOutput(t, got)
 
 			for _, f := range got.File {
 				want, err := ioutil.ReadFile(testOutputFilename(f.GetName()))
