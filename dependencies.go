@@ -72,22 +72,26 @@ type tsType struct {
 }
 
 func (d *dependencyResolver) TsType(fd *descriptor.FileDescriptorProto, typeName string) *tsType {
-	if typeName == ".google.protobuf.Timestamp" {
+	switch typeName {
+	case ".google.protobuf.Timestamp":
 		// Google WKT Timestamp is a special case here:
 		//
 		// Currently the value will just be left as jsonpb RFC 3339 string.
 		// JSON.stringify already handles serializing Date to its RFC 3339 format.
-		//
 		return &tsType{Name: "Date"}
-	}
-	orig, err := d.resolve(typeName)
-	var iv *importValues
-	tsName := underscoreize(strings.Replace(typeName, "."+orig.GetPackage()+".", "", -1))
-	if err == nil {
-		if !samePackage(fd, orig) {
-			iv = getImport(orig)
-			tsName = fmt.Sprintf("%s.%s", iv.Name, tsName)
+	case ".google.protobuf.Struct":
+		// Structs map directly to JS objects
+		return &tsType{Name: "object"}
+	default:
+		orig, err := d.resolve(typeName)
+		var iv *importValues
+		tsName := underscoreize(strings.Replace(typeName, "."+orig.GetPackage()+".", "", -1))
+		if err == nil {
+			if !samePackage(fd, orig) {
+				iv = getImport(orig)
+				tsName = fmt.Sprintf("%s.%s", iv.Name, tsName)
+			}
 		}
+		return &tsType{Import: iv, Name: tsName}
 	}
-	return &tsType{Import: iv, Name: tsName}
 }

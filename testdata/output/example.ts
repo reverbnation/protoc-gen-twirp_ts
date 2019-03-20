@@ -192,14 +192,14 @@ export class SearchResponse implements ISearchResponse {
 }
 
 export interface IDebugResponse {
-  attributes?: google_protobuf.Struct
+  attributes?: object
   revisionHash?: string
   
   toJSON?(): object
 }
 
 export interface IDebugResponseJSON {
-  attributes?: google_protobuf.Struct
+  attributes?: object
   revision_hash?: string
   toJSON?(): object
 }
@@ -216,10 +216,10 @@ export class DebugResponse implements IDebugResponse {
   }
   
   // attributes (attributes)
-  public get attributes(): google_protobuf.Struct {
+  public get attributes(): object {
     return this._json.attributes!
   }
-  public set attributes(value: google_protobuf.Struct) {
+  public set attributes(value: object) {
     this._json.attributes = value
   }
   
@@ -233,7 +233,7 @@ export class DebugResponse implements IDebugResponse {
   
   static fromJSON(m: IDebugResponseJSON = {}): DebugResponse {
     return new DebugResponse({
-      attributes: google_protobuf.Struct.fromJSON(m['attributes']!),
+      attributes: m['attributes'],
       revisionHash: m['revision_hash']!
     })
   }

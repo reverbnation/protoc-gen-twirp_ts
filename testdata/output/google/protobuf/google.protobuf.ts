@@ -132,7 +132,7 @@ export interface IValue {
   numberValue?: number
   stringValue?: string
   boolValue?: boolean
-  structValue?: Struct
+  structValue?: object
   listValue?: ListValue
   
   toJSON?(): object
@@ -143,7 +143,7 @@ export interface IValueJSON {
   number_value?: number
   string_value?: string
   bool_value?: boolean
-  struct_value?: Struct
+  struct_value?: object
   list_value?: ListValue
   toJSON?(): object
 }
@@ -196,10 +196,10 @@ export class Value implements IValue {
   }
   
   // structValue (struct_value)
-  public get structValue(): Struct {
+  public get structValue(): object {
     return this._json.struct_value!
   }
-  public set structValue(value: Struct) {
+  public set structValue(value: object) {
     this._json.struct_value = value
   }
   
@@ -217,7 +217,7 @@ export class Value implements IValue {
       numberValue: m['number_value']!,
       stringValue: m['string_value']!,
       boolValue: m['bool_value']!,
-      structValue: Struct.fromJSON(m['struct_value']!),
+      structValue: m['struct_value'],
       listValue: ListValue.fromJSON(m['list_value']!)
     })
   }

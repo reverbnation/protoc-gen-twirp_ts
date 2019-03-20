@@ -271,6 +271,10 @@ func objectToField(fv fieldValues) string {
 		t = "string"
 	}
 
+	if t == "object" {
+		return fmt.Sprintf("m['%s']", fv.Name)
+	}
+
 	if fv.IsRepeated {
 		switch t {
 		case "string", "number", "boolean":
